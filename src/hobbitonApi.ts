@@ -2,11 +2,6 @@ import axios from 'axios';
 import { getBuildFromVersion } from './lib';
 import config from './config';
 
-const apiAxios = axios.create({
-  baseURL: config.hobbitonUrl + '/api',
-  timeout: 30000
-});
-
 export type InitialApp = {
   name: string;
   projectId: string;
@@ -14,22 +9,37 @@ export type InitialApp = {
   installed: boolean;
 };
 
-export async function getApps() {
-  const resp = await apiAxios.get<InitialApp[]>(`apps`);
+function getAxios(baseUrl: string) {
+  return axios.create({
+    baseURL: baseUrl + '/api',
+    timeout: 30000
+  });
+}
+
+export async function getApps(baseUrl: string) {
+  const resp = await getAxios(baseUrl).get<{ name: string; apps: InitialApp[] }>(`apps`);
 
   return resp.data;
 }
 
-export async function getCurrentBuild(name: string) {
-  const resp = await apiAxios.get<{ version: string }>(`currentVersion/${name}`);
+export async function getCurrentBuild(baseUrl: string, name: string) {
+  const resp = await getAxios(baseUrl).get<{ version: string }>(`currentVersion/${name}`);
 
   return resp.data && getBuildFromVersion(resp.data.version);
 }
 
-export async function updateApp(projectId: string) {
+export async function updateApp(baseUrl: string, projectId: string) {
   const pId = encodeURIComponent(projectId);
 
-  const resp = await apiAxios.post(`update/${pId}`, null, { timeout: undefined });
+  const resp = await getAxios(baseUrl).post(`update/${pId}`, null, { timeout: undefined });
+
+  return resp.data;
+}
+
+export async function getConfig(baseUrl: string, projectId: string) {
+  const pId = encodeURIComponent(projectId);
+
+  const resp = await getAxios(baseUrl).get<{ config: string }>(`config/${pId}`, { timeout: undefined });
 
   return resp.data;
 }

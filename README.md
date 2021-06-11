@@ -1,4 +1,10 @@
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+# rivendell
+
+## Configuration
+
+REACT_APP_HOBBITON_URL='http://localhost:52937'
+REACT_APP_GITLAB_URL="https://gitlab.com/api/v4"
+REACT_APP_GITLAB_TOKEN="abc"
 
 ## Available Scripts
 

@@ -1,0 +1,33 @@
+# This file is a template, and might need editing before it works on your project.
+# Official framework image. Look for the different tagged releases at:
+# https://hub.docker.com/r/library/node/tags/
+image: node:14
+
+# This folder is cached between builds
+# http://docs.gitlab.com/ee/ci/yaml/README.html#cache
+cache:
+  paths:
+    - node_modules/
+
+stages:
+  - install
+  - check
+
+install:
+  stage: install
+  script:
+    - yarn
+
+build:
+  stage: check
+  script:
+    - yarn build
+
+typecheck:
+  stage: check
+  script:
+    - yarn typecheck
+# test:
+#   stage: check
+#   script:
+#     - bin/test

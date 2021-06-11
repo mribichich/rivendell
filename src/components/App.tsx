@@ -7,70 +7,79 @@ import matchAll from 'string.prototype.matchall';
 import moment from 'moment';
 import { JellyfishSpinner } from 'react-spinners-kit';
 import { getCurrentBuild, updateApp, getApps, InitialApp } from '../hobbitonApi';
+import Config from './Config';
+import { Apps, AppState, ClientState } from '../types';
+import config from '../config';
+import Chip from '@material-ui/core/Chip';
 
-type AppState = {
-  name: string;
-  projectId: string;
-  installed: boolean;
-  upToDate?: boolean;
-  currentBuild?: number | null;
-  currentBuildDate?: Date;
-  currentBuildError?: boolean;
-  missingBuilds?: number[];
-  latestBuild?: number | null;
-  latestBuildDate?: Date;
-  latestBuildError?: boolean;
-  issues?: number[];
-  dependencies?: string[];
-  updating?: boolean;
-};
-
-type Apps = {
-  [app: string]: AppState;
-};
+function generateIndexKey(clientName: string, appName: string) {
+  return clientName + '_' + appName;
+}
 
 type State = {
   loading: boolean;
   apps: Apps;
+  clients: ClientState[];
+  configAppModal?: string;
+  configClientUrl?: string;
 };
 
 class App extends PureComponent<any, State> {
   state: Readonly<State> = {
     loading: true,
-    apps: {}
+    apps: {},
+    clients: [],
+    configAppModal: undefined,
+    configClientUrl: undefined
   };
 
   async componentDidMount() {
-    const apps = await getApps();
+    for await (const clientUrl of config.hobbitonUrls) {
+      try {
+        const clientApps = await getApps(clientUrl);
 
-    this.setState({
-      loading: false,
-      apps: apps.reduce<Apps>(
-        (acc, cur) => ({
-          ...acc,
-          [cur.name]: {
-            name: cur.name,
-            projectId: cur.projectId,
-            installed: cur.installed,
-            // currentBuild: cur.version,
-            upToDate: false
+        const apps = clientApps.apps.reduce<Apps>(
+          (acc, cur) => ({
+            ...acc,
+            [generateIndexKey(clientApps.name, cur.name)]: {
+              clientName: clientApps.name,
+              clientUrl,
+              name: cur.name,
+              projectId: cur.projectId,
+              installed: cur.installed,
+              version: cur.version,
+              upToDate: false
+            }
+          }),
+          {}
+        );
+
+        this.setState({
+          loading: false,
+          clients: [...this.state.clients, { name: clientApps.name, url: clientUrl }],
+          apps: {
+            ...this.state.apps,
+            ...apps
           }
-        }),
-        {}
-      )
-    });
+        });
 
-    for await (const app of apps) {
-      const currentBuild = app.installed ? await this.processCurrentBuild(app, app.version) : undefined;
-      const latestPipeline = await this.processPipelines(app, currentBuild);
+        for await (const app of Object.values(apps)) {
+          const currentBuild = app.installed ? await this.processCurrentBuild(app) : undefined;
+          const latestPipeline = await this.processPipelines(app, currentBuild);
 
-      this.processVersionState(app, currentBuild, latestPipeline);
+          this.processVersionState(app, currentBuild, latestPipeline);
+        }
+      } catch (error) {
+        console.log(error);
+      }
     }
   }
 
-  async processCurrentBuild(app: InitialApp, version?: string) {
+  async processCurrentBuild(app: AppState) {
     try {
-      const currentBuild = version ? getBuildFromVersion(version) : await getCurrentBuild(app.name);
+      const currentBuild = app.version
+        ? getBuildFromVersion(app.version)
+        : await getCurrentBuild(app.clientUrl, app.name);
       const pipeline = currentBuild ? await getPipeline(app.projectId, currentBuild) : undefined;
 
       const currentBuildDate = pipeline ? pipeline.finished_at : undefined;
@@ -78,7 +87,12 @@ class App extends PureComponent<any, State> {
       this.setState(prevState => ({
         apps: {
           ...prevState.apps,
-          [app.name]: { ...prevState.apps[app.name], currentBuild, currentBuildDate, currentBuildError: false }
+          [generateIndexKey(app.clientName, app.name)]: {
+            ...prevState.apps[generateIndexKey(app.clientName, app.name)],
+            currentBuild,
+            currentBuildDate,
+            currentBuildError: false
+          }
         }
       }));
 
@@ -87,13 +101,17 @@ class App extends PureComponent<any, State> {
       this.setState(prevState => ({
         apps: {
           ...prevState.apps,
-          [app.name]: { ...prevState.apps[app.name], currentBuild: undefined, currentBuildError: true }
+          [generateIndexKey(app.clientName, app.name)]: {
+            ...prevState.apps[generateIndexKey(app.clientName, app.name)],
+            currentBuild: undefined,
+            currentBuildError: true
+          }
         }
       }));
     }
   }
 
-  async processPipelines(app: InitialApp, currentBuild: number | null | undefined) {
+  async processPipelines(app: AppState, currentBuild: number | null | undefined) {
     try {
       const pipelines = await getPipelines(app.projectId);
 
@@ -152,8 +170,8 @@ class App extends PureComponent<any, State> {
       this.setState(prevState => ({
         apps: {
           ...prevState.apps,
-          [app.name]: {
-            ...prevState.apps[app.name],
+          [generateIndexKey(app.clientName, app.name)]: {
+            ...prevState.apps[generateIndexKey(app.clientName, app.name)],
             missingBuilds: missingPipelines.map(m => m.id),
             latestBuild,
             latestBuildDate,
@@ -169,17 +187,24 @@ class App extends PureComponent<any, State> {
       this.setState(prevState => ({
         apps: {
           ...prevState.apps,
-          [app.name]: { ...prevState.apps[app.name], latestBuild: undefined, latestBuildError: true }
+          [generateIndexKey(app.clientName, app.name)]: {
+            ...prevState.apps[generateIndexKey(app.clientName, app.name)],
+            latestBuild: undefined,
+            latestBuildError: true
+          }
         }
       }));
     }
   }
 
-  processVersionState(app: InitialApp, current: number | null | undefined, latest: number | null | undefined) {
+  processVersionState(app: AppState, current: number | null | undefined, latest: number | null | undefined) {
     this.setState(prevState => ({
       apps: {
         ...prevState.apps,
-        [app.name]: { ...prevState.apps[app.name], upToDate: current && latest ? current >= latest : false }
+        [generateIndexKey(app.clientName, app.name)]: {
+          ...prevState.apps[generateIndexKey(app.clientName, app.name)],
+          upToDate: current && latest ? current >= latest : false
+        }
       }
     }));
   }
@@ -189,7 +214,10 @@ class App extends PureComponent<any, State> {
       this.setState(prevState => ({
         apps: {
           ...prevState.apps,
-          [app.name]: { ...prevState.apps[app.name], updating: true }
+          [generateIndexKey(app.clientName, app.name)]: {
+            ...prevState.apps[generateIndexKey(app.clientName, app.name)],
+            updating: true
+          }
         }
       }));
 
@@ -207,21 +235,24 @@ class App extends PureComponent<any, State> {
         }
       }
 
-      await updateApp(app.projectId);
+      await updateApp(app.clientUrl, app.projectId);
 
       await this.processCurrentBuild(app);
     } catch (error) {
       // this.setState(prevState => ({
       //   apps: {
       //     ...prevState.apps,
-      //     [app.name]: { ...prevState.apps[app.name],updateError: error }
+      //     [generateIndexKey(clientName, app.name)]: { ...prevState.apps[generateIndexKey(clientName, app.name)],updateError: error }
       //   }
       // }));
     } finally {
       this.setState(prevState => ({
         apps: {
           ...prevState.apps,
-          [app.name]: { ...prevState.apps[app.name], updating: false }
+          [generateIndexKey(app.clientName, app.name)]: {
+            ...prevState.apps[generateIndexKey(app.clientName, app.name)],
+            updating: false
+          }
         }
       }));
     }
@@ -235,8 +266,8 @@ class App extends PureComponent<any, State> {
     this.setState(prevState => ({
       apps: {
         ...prevState.apps,
-        [app.name]: {
-          ...prevState.apps[app.name],
+        [generateIndexKey(app.clientName, app.name)]: {
+          ...prevState.apps[generateIndexKey(app.clientName, app.name)],
           currentBuild: undefined,
           currentBuildDate: undefined,
           currentBuildError: false,
@@ -255,6 +286,29 @@ class App extends PureComponent<any, State> {
     this.processVersionState(app, currentBuild, latestPipeline);
   };
 
+  handleOnConfigClick = (app: AppState) => async () => {
+    this.setState({
+      configAppModal: app.name,
+      configClientUrl: app.clientUrl
+    });
+  };
+
+  handleOnConfigOk = () => {
+    this.setState({
+      configAppModal: undefined,
+      configClientUrl: undefined
+    });
+  };
+
+  handleOnConfigCancel = () => {
+    this.setState({
+      configAppModal: undefined,
+      configClientUrl: undefined
+    });
+  };
+
+  handleClientClick = (clientName: string) => () => {};
+
   render() {
     if (this.state.loading) {
       return <JellyfishSpinner />;
@@ -263,7 +317,7 @@ class App extends PureComponent<any, State> {
     const [installed, notInstalled] = partition(f => f.installed, Object.values(this.state.apps));
 
     return (
-      <div>
+      <div style={{ margin: 20 }}>
         <div>
           <h2>Installed</h2>
 
@@ -298,99 +352,114 @@ class App extends PureComponent<any, State> {
     const anyInstalling = any(a => a.updating || false, apps);
 
     return (
-      <table>
-        <thead>
-          <tr>
-            <th>App</th>
-            <th>Current Version</th>
-            <th>Latest Version</th>
-            <th>State</th>
-            <th>Missing Versions</th>
-            <th>Issues</th>
-            <th>Dependencies</th>
-            <th />
-            <th />
-          </tr>
-        </thead>
+      <div>
+        <div>{this.state.clients.map(m => this.renderClient(m.name))}</div>
 
-        <tbody>
-          {apps.map(m => (
-            <tr
-              key={m.name}
-              style={
-                m.currentBuildError || m.latestBuildError
-                  ? errorStyle
-                  : m.installed
-                  ? not(m.upToDate)
-                    ? warningStyle
-                    : undefined
-                  : undefined
-              }
-            >
-              <td style={CellSytles}>{m.name}</td>
-              <td style={CellSytles}>
-                {m.currentBuildError ? (
-                  'error'
-                ) : (
-                  <div>
-                    {m.currentBuild}
-                    {m.currentBuildDate && <span> - {moment(m.currentBuildDate).format('DD/MM/YYYY HH:mm')}hs</span>}
-                  </div>
-                )}
-              </td>
-              <td style={CellSytles}>
-                {m.latestBuildError ? (
-                  'error'
-                ) : (
-                  <div>
-                    {m.latestBuild}
-                    {m.latestBuildDate && <span> - {moment(m.latestBuildDate).format('DD/MM/YYYY HH:mm')}hs</span>}
-                  </div>
-                )}
-              </td>
-              <td style={CellSytles}>
-                {m.upToDate ? (
-                  <CheckIcon />
-                ) : (
-                  moment(m.latestBuildDate).diff(moment(m.currentBuildDate), 'days') + ' dias'
-                )}
-              </td>
-              <td style={CellSytles}>
-                {m.missingBuilds && not(isEmpty(m.missingBuilds)) ? m.missingBuilds.join(', ') : '-'}
-              </td>
-              <td style={CellSytles}>{m.issues && not(isEmpty(m.issues)) ? m.issues.join(', ') : '-'}</td>
-              <td style={CellSytles}>
-                {m.dependencies && not(isEmpty(m.dependencies)) ? (
-                  <div>
-                    {m.dependencies.map(m => (
-                      <div key={m}>{m}</div>
-                    ))}
-                  </div>
-                ) : (
-                  '-'
-                )}
-              </td>
-              <td style={CellSytles}>
-                <button disabled={!m.installed || anyInstalling} onClick={() => this.handleOnUpdateClick(m)}>
-                  Update
-                </button>
-              </td>
-              <td style={CellSytles}>
-                <button onClick={() => this.handleOnRefreshClick(m)}>Refresh</button>
-              </td>
-              <td style={{ padding: '4px 8px' }}>
-                {m.updating && (
-                  <JellyfishSpinner
-                    size={36}
-                    // color="#686769"
-                  />
-                )}
-              </td>
+        <table>
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th>App</th>
+              <th>Current Version</th>
+              <th>Latest Version</th>
+              <th>State</th>
+              <th>Missing Versions</th>
+              <th>Issues</th>
+              <th>Dependencies</th>
+              <th />
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+
+          <tbody>
+            {apps.map(m => (
+              <tr
+                key={m.name}
+                style={
+                  m.currentBuildError || m.latestBuildError
+                    ? errorStyle
+                    : m.installed
+                    ? not(m.upToDate)
+                      ? warningStyle
+                      : undefined
+                    : undefined
+                }
+              >
+                <td style={CellSytles}>{m.clientName}</td>
+                <td style={CellSytles}>{m.name}</td>
+                <td style={CellSytles}>
+                  {m.currentBuildError ? (
+                    'error'
+                  ) : (
+                    <div>
+                      {m.currentBuild}
+                      {m.currentBuildDate && <span> - {moment(m.currentBuildDate).format('DD/MM/YYYY HH:mm')}hs</span>}
+                    </div>
+                  )}
+                </td>
+                <td style={CellSytles}>
+                  {m.latestBuildError ? (
+                    'error'
+                  ) : (
+                    <div>
+                      {m.latestBuild}
+                      {m.latestBuildDate && <span> - {moment(m.latestBuildDate).format('DD/MM/YYYY HH:mm')}hs</span>}
+                    </div>
+                  )}
+                </td>
+                <td style={CellSytles}>
+                  {m.upToDate ? (
+                    <CheckIcon />
+                  ) : (
+                    moment(m.latestBuildDate).diff(moment(m.currentBuildDate), 'days') + ' dias'
+                  )}
+                </td>
+                <td style={CellSytles}>
+                  {m.missingBuilds && not(isEmpty(m.missingBuilds)) ? m.missingBuilds.join(', ') : '-'}
+                </td>
+                <td style={CellSytles}>{m.issues && not(isEmpty(m.issues)) ? m.issues.join(', ') : '-'}</td>
+                <td style={CellSytles}>
+                  {m.dependencies && not(isEmpty(m.dependencies)) ? (
+                    <div>
+                      {m.dependencies.map(m => (
+                        <div key={m}>{m}</div>
+                      ))}
+                    </div>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+                <td style={CellSytles}>
+                  <button disabled={!m.installed || anyInstalling} onClick={() => this.handleOnUpdateClick(m)}>
+                    Update
+                  </button>
+                </td>
+                <td style={CellSytles}>
+                  <button onClick={() => this.handleOnRefreshClick(m)}>Refresh</button>
+                </td>
+                <td style={CellSytles}>
+                  <button onClick={this.handleOnConfigClick(m)}>config</button>
+                </td>
+                <td style={{ padding: '4px 8px' }}>
+                  {m.updating && (
+                    <JellyfishSpinner
+                      size={36}
+                      // color="#686769"
+                    />
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {/* <Config  clientUrl={this.state.configClientUrl}   name={this.state.configAppModal} onOk={this.handleOnConfigOk} onCancel={this.handleOnConfigCancel} /> */}
+      </div>
     );
+  }
+
+  renderClient(clientName: string) {
+    return <Chip label={clientName} variant="outlined" onClick={this.handleClientClick(clientName)} />;
   }
 }
 
